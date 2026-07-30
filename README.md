@@ -1,6 +1,6 @@
 # ⚒️ VocabForge v3.0
 
-**سازنده فلش‌کارت هوشمند برای [Leitner Pro](https://github.com/niksiratforex-ux/leitner-pro)**
+**سازنده فلش‌کارت هوشمند برای [Leitner Pro](http://readner.eu.cc/)**
 
 VocabForge ابزاری برای استخراج واژگان انگلیسی از فایل‌های PDF و DOCX (مانند Manhattan 500 GRE)، غنی‌سازی خودکار با تعاریف و مترادف‌ها، ترجمه فارسی، و خروجی JSON مستقیم برای ورود به برنامه مرور لایتنر است.
 
