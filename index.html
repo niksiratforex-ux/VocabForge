@@ -100,6 +100,14 @@ let cards=[]; // full Leitner-format cards
 let sourceName='';
 
 // ═══════════════════════════════════════════
+// PERSISTENCE
+// ═══════════════════════════════════════════
+const VF_KEY='vocabforge_cards';
+function saveCards(){try{localStorage.setItem(VF_KEY,JSON.stringify(cards))}catch(e){}}
+function loadCards(){try{const d=localStorage.getItem(VF_KEY);if(d){cards=JSON.parse(d);if(!Array.isArray(cards))cards=[]}}catch(e){cards=[]}}
+loadCards();
+
+// ═══════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════
 function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
@@ -170,7 +178,9 @@ function render(){
 // ═══════════════════════════════════════════
 // IMPORT TAB — DOCX Manhattan / PDF / Text
 // ═══════════════════════════════════════════
+let pendingPdf=null;
 function renderImport(c){
+  const pdfName=pendingPdf?pendingPdf.name:'هیچ فایلی انتخاب نشده';
   c.innerHTML=`
   <div class="card">
     <h3 style="margin-bottom:12px">📂 ورود از DOCX (مانند Manhattan 500)</h3>
@@ -180,21 +190,29 @@ function renderImport(c){
   </div>
   <div class="card">
     <h3 style="margin-bottom:12px">📑 ورود از PDF</h3>
-    <div class="drop-zone" id="pdfDrop"><div class="icon">📕</div><p>فایل PDF اینجا رها کنید</p></div>
+    <div class="drop-zone" id="pdfDrop" style="padding:20px"><div class="icon">📕</div><p>${esc(pdfName)}</p><p style="font-size:.75rem;color:var(--text2);margin-top:4px">کلیک کنید یا فایل را بکشید</p></div>
     <input type="file" id="pdfInput" accept=".pdf" style="display:none">
-    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
-      <label style="font-size:.78rem;color:var(--text2)">محدوده صفحات:</label>
-      <input class="input" id="pdfPages" placeholder="مثلاً 5-15" style="max-width:140px">
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+      <div><label style="font-size:.76rem;color:var(--text2);display:block;margin-bottom:3px">محدوده صفحات</label><input class="input" id="pdfPages" placeholder="خالی = همه" style="max-width:130px;font-size:.8rem"></div>
+      <div><label style="font-size:.76rem;color:var(--text2);display:block;margin-bottom:3px">حداقل طول کلمه</label><input class="input" type="number" id="pdfMinLen" value="3" min="2" max="15" style="max-width:80px;font-size:.8rem"></div>
+      <div><label style="font-size:.76rem;color:var(--text2);display:block;margin-bottom:3px">حداکثر کلمه</label><input class="input" type="number" id="pdfMaxWords" value="300" min="10" max="5000" style="max-width:90px;font-size:.8rem"></div>
+      <button class="btn btn-primary" id="pdfExtractBtn" ${pendingPdf?'':'disabled'}>🔍 استخراج</button>
     </div>
+    <div class="progress-bar" id="pdfProg" style="display:none"><div class="progress-fill" id="pdfFill" style="width:0"></div></div>
+    <div id="pdfStatus" style="font-size:.8rem;color:var(--text2);margin-top:6px"></div>
   </div>
   <div class="card">
     <h3 style="margin-bottom:12px">✏️ ورود متن خام</h3>
     <textarea class="input" id="rawText" placeholder="متن انگلیسی را اینجا paste کنید..."></textarea>
-    <button class="btn btn-primary btn-sm" id="parseTextBtn" style="margin-top:8px">استخراج کلمات</button>
+    <div style="display:flex;gap:10px;align-items:end;margin-top:8px;flex-wrap:wrap">
+      <div><label style="font-size:.76rem;color:var(--text2);display:block;margin-bottom:3px">حداقل طول</label><input class="input" type="number" id="textMinLen" value="3" min="2" max="15" style="max-width:80px;font-size:.8rem"></div>
+      <div><label style="font-size:.76rem;color:var(--text2);display:block;margin-bottom:3px">حداکثر کلمه</label><input class="input" type="number" id="textMaxWords" value="300" min="10" max="5000" style="max-width:90px;font-size:.8rem"></div>
+      <button class="btn btn-primary btn-sm" id="parseTextBtn">🔍 استخراج</button>
+    </div>
   </div>
   <div class="card">
     <h3 style="margin-bottom:12px">📋 ورود لیست کلمات</h3>
-    <textarea class="input" id="wordList" placeholder="هر خط یک کلمه:&#10;ephemeral&#10;ubiquitous&#10;pragmatic" style="font-family:monospace"></textarea>
+    <textarea class="input" id="wordList" placeholder="هر خط یک کلمه:\nephemeral\nubiquitous\npragmatic" style="font-family:monospace"></textarea>
     <button class="btn btn-primary btn-sm" id="parseListBtn" style="margin-top:8px">افزودن</button>
   </div>
   <div id="importStatus" style="margin-top:10px;font-size:.82rem;color:var(--text2)"></div>`;
@@ -214,12 +232,18 @@ function renderImport(c){
   pdfDrop.onclick=()=>pdfInput.click();
   pdfDrop.ondragover=e=>{e.preventDefault();pdfDrop.classList.add('drag-over')};
   pdfDrop.ondragleave=()=>pdfDrop.classList.remove('drag-over');
-  pdfDrop.ondrop=e=>{e.preventDefault();pdfDrop.classList.remove('drag-over');if(e.dataTransfer.files[0])parsePdfFile(e.dataTransfer.files[0])};
-  pdfInput.onchange=e=>{if(e.target.files[0])parsePdfFile(e.target.files[0])};
+  pdfDrop.ondrop=e=>{e.preventDefault();pdfDrop.classList.remove('drag-over');if(e.dataTransfer.files[0])selectPdf(e.dataTransfer.files[0])};
+  pdfInput.onchange=e=>{if(e.target.files[0])selectPdf(e.target.files[0])};
+  document.getElementById('pdfExtractBtn').onclick=extractPdf;
 
   // Text
   document.getElementById('parseTextBtn').onclick=parseRawText;
   document.getElementById('parseListBtn').onclick=parseWordList;
+}
+
+function selectPdf(file){
+  pendingPdf=file;
+  renderImport(document.getElementById('content'));
 }
 
 // ═══════════════════════════════════════════
@@ -304,6 +328,7 @@ async function parseDocxFile(file){
     const existing=new Set(cards.map(c=>c.word));
     const fresh=parsed.filter(c=>!existing.has(c.word));
     cards.push(...fresh);
+    saveCards();
     status.textContent=`✅ ${parsed.length} کلمه استخراج شد (${fresh.length} جدید، ${parsed.length-fresh.length} تکراری)`;
     toast(parsed.length+' کلمه از DOCX استخراج شد','success');
   }catch(e){status.textContent='❌ خطا: '+e.message;console.error(e)}
@@ -326,24 +351,38 @@ function getCellText(cell){
 // ═══════════════════════════════════════════
 // PDF PARSER
 // ═══════════════════════════════════════════
-async function parsePdfFile(file){
-  const status=document.getElementById('importStatus');
-  status.textContent='در حال خواندن '+file.name+'...';
+async function extractPdf(){
+  if(!pendingPdf)return;
+  const status=document.getElementById('pdfStatus');
+  const prog=document.getElementById('pdfProg');
+  const fill=document.getElementById('pdfFill');
+  const btn=document.getElementById('pdfExtractBtn');
+  btn.disabled=true;prog.style.display='block';
+  status.textContent='در حال خواندن '+pendingPdf.name+'...';
   try{
-    const buf=await file.arrayBuffer();
+    const buf=await pendingPdf.arrayBuffer();
     const pdf=await pdfjsLib.getDocument({data:buf}).promise;
     const pagesStr=document.getElementById('pdfPages').value.trim();
     const pageRange=parsePageRange(pagesStr,pdf.numPages);
+    const minLen=parseInt(document.getElementById('pdfMinLen').value)||3;
+    const maxWords=parseInt(document.getElementById('pdfMaxWords').value)||300;
     let text='';
+    const totalPages=pageRange?pageRange.length:pdf.numPages;
+    let done=0;
     for(let i=1;i<=pdf.numPages;i++){
       if(pageRange&&!pageRange.includes(i))continue;
       const p=await pdf.getPage(i);
       const tc=await p.getTextContent();
       text+=tc.items.map(x=>x.str).join(' ')+' ';
+      done++;
+      fill.style.width=((done/totalPages)*80)+'%';
+      status.textContent=`صفحه ${done}/${totalPages}`;
     }
-    addWordsFromText(text,file.name.replace(/\.pdf$/i,''));
-    status.textContent='✅ کلمات از PDF استخراج شد';
+    addWordsFromText(text,pendingPdf.name.replace(/\.pdf$/i,''),minLen,maxWords);
+    fill.style.width='100%';
+    status.textContent='✅ استخراج کامل شد';
   }catch(e){status.textContent='❌ خطا: '+e.message}
+  finally{btn.disabled=false;setTimeout(()=>{prog.style.display='none'},2000)}
 }
 
 function parsePageRange(str,total){
@@ -356,7 +395,9 @@ function parsePageRange(str,total){
 function parseRawText(){
   const text=document.getElementById('rawText').value;
   if(!text.trim()){toast('متنی وارد نشده','error');return}
-  addWordsFromText(text,'متن ورودی');
+  const minLen=parseInt(document.getElementById('textMinLen').value)||3;
+  const maxWords=parseInt(document.getElementById('textMaxWords').value)||300;
+  addWordsFromText(text,'متن ورودی',minLen,maxWords);
 }
 
 function parseWordList(){
@@ -366,20 +407,23 @@ function parseWordList(){
   const existing=new Set(cards.map(c=>c.word));
   let added=0;
   words.forEach(w=>{if(!existing.has(w)){cards.push(makeLeitnerCard({word:w,source:'لیست دستی'}));existing.add(w);added++}});
+  saveCards();
   const status=document.getElementById('importStatus');
   status.textContent=`✅ ${added} کلمه اضافه شد`;
   toast(added+' کلمه اضافه شد','success');
 }
 
-function addWordsFromText(text,source){
+function addWordsFromText(text,source,minLen,maxWords){
+  minLen=minLen||3;maxWords=maxWords||300;
   const STOP=new Set('the and for are but not you all can had her was one our out has his how its may new now old see way who did get let say she too use this that with have from they been said each which their will other about many then them would like so these long make thing him two look more go come could time very when made after back only much just over such take year some what into than also well were your being first does done down even every find give good great here high home keep last left life line live love most must need next part place point right same show small start state still tell turn under want work young around because before between both children country course different during early enough eye face family far feel few food four free full general group grow hand happen happy hard head hear heart help horse house however idea important inner island join kind king know land language large late lead leave less list lose lot low man material matter mean measure mind moment music nation nature near never night north notice obtain often once open order page paint paper pay percent perhaps period plan pound power prepare present president pretty problem program project provide public pull purpose push put rest result road rock role round rule school search second seem sense serve set several short shoulder side since smile society soldier some soon sort sound south space spend sport stay stop story study subject success suggest support sure surprise table talk than their them themselves then there these they thing this those though thought thousand through together toward travel tree true unit upon usual value voice wait walk war warm watch week west whole whose why wide wife will without wonder word world write wrong yard young able across although appear behind big body build change close'.split(' '));
   const words=text.match(/[a-zA-Z]+/g)||[];
   const countMap={};
-  words.forEach(w=>{const wl=w.toLowerCase();if(wl.length>=3&&!STOP.has(wl))countMap[wl]=(countMap[wl]||0)+1});
-  const sorted=Object.entries(countMap).sort((a,b)=>b[1]-a[1]).slice(0,500);
+  words.forEach(w=>{const wl=w.toLowerCase();if(wl.length>=minLen&&!STOP.has(wl))countMap[wl]=(countMap[wl]||0)+1});
+  const sorted=Object.entries(countMap).sort((a,b)=>b[1]-a[1]).slice(0,maxWords);
   const existing=new Set(cards.map(c=>c.word));
   let added=0;
   sorted.forEach(([w])=>{if(!existing.has(w)){cards.push(makeLeitnerCard({word:w,source}));existing.add(w);added++}});
+  saveCards();
   toast(added+' کلمه جدید اضافه شد','success');
 }
 
@@ -428,7 +472,7 @@ function renderCards(c){
         ${w.synonyms.length?`<div style="margin-top:3px">${w.synonyms.slice(0,4).map(s=>`<span class="tag">${esc(s)}</span>`).join('')}</div>`:''}
       </div>`;
     }).join('');
-    el.querySelectorAll('[data-act="del"]').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();const idx=parseInt(btn.closest('.card-item').dataset.idx);if(confirm('حذف «'+cards[idx].word+'»؟')){cards.splice(idx,1);refresh();toast('حذف شد','success')}}});
+    el.querySelectorAll('[data-act="del"]').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();const idx=parseInt(btn.closest('.card-item').dataset.idx);if(confirm('حذف «'+cards[idx].word+'»؟')){cards.splice(idx,1);saveCards();refresh();toast('حذف شد','success')}}});
     el.querySelectorAll('[data-act="speak"]').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();speakWord(cards[parseInt(btn.closest('.card-item').dataset.idx)].word)}});
     el.querySelectorAll('[data-act="edit"]').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();openEditModal(parseInt(btn.closest('.card-item').dataset.idx),refresh)}});
   }
@@ -465,6 +509,7 @@ function openEditModal(idx,refresh){
     card.antonyms=ov.querySelector('#eAnt').value.split(';').map(s=>s.trim()).filter(s=>s);
     card.note=ov.querySelector('#eNote').value;
     card.trap=ov.querySelector('#eTrap').value;
+    saveCards();
     ov.remove();refresh();toast('ذخیره شد','success');
   };
   ov.onclick=e=>{if(e.target===ov)ov.remove()};
@@ -526,9 +571,94 @@ function renderManualTransList(){
     btn.onclick=()=>{
       const idx=parseInt(btn.dataset.save);
       const input=el.querySelector(`input[data-idx="${idx}"]`);
-      if(input&&input.value.trim()){cards[idx].translation=input.value.trim();toast('ذخیره شد','success');input.value='';renderManualTransList()}
+      if(input&&input.value.trim()){cards[idx].translation=input.value.trim();saveCards();toast('ذخیره شد','success');input.value='';renderManualTransList()}
     };
   });
+}
+
+// ═══ SMART WORD RESOLVER ═══
+// Tries multiple forms of a word to find it in the dictionary
+function getWordVariants(word){
+  const w=word.toLowerCase().trim();
+  const variants=[w];
+  // Multi-word: try first word only
+  if(w.includes(' ')){variants.push(w.split(/\s+/)[0])}
+  // Suffix stripping for common English morphology
+  if(w.endsWith('ing')){variants.push(w.slice(0,-3),w.slice(0,-3)+'e',w.slice(0,-4))} // castigating→castigate, making→make
+  if(w.endsWith('tion')){variants.push(w.slice(0,-4)+'te',w.slice(0,-4)+'t')} // education→educate
+  if(w.endsWith('ment')){variants.push(w.slice(0,-4))} // admonishment→admonish
+  if(w.endsWith('ness')){variants.push(w.slice(0,-4))} // kindness→kind
+  if(w.endsWith('ity')){variants.push(w.slice(0,-3)+'e',w.slice(0,-3)+'y')} // ferocity→feroce/ferocy
+  if(w.endsWith('ence')){variants.push(w.slice(0,-4)+'d')} // adherence→adhere
+  if(w.endsWith('ance')){variants.push(w.slice(0,-4)+'e')} // reluctance→relucte
+  if(w.endsWith('ly')){variants.push(w.slice(0,-2))} // quickly→quick
+  if(w.endsWith('ed')){variants.push(w.slice(0,-2),w.slice(0,-1))} // castigated→castigate/castigat
+  if(w.endsWith('er')){variants.push(w.slice(0,-2),w.slice(0,-2)+'e')} // bigger→big
+  if(w.endsWith('es')){variants.push(w.slice(0,-2),w.slice(0,-1))} // processes→process
+  if(w.endsWith('s')&&!w.endsWith('ss')){variants.push(w.slice(0,-1))} // words→word
+  if(w.endsWith('ful')){variants.push(w.slice(0,-3))} // beautiful→beauty
+  if(w.endsWith('ous')){variants.push(w.slice(0,-3))} // dangerous→danger
+  if(w.endsWith('ive')){variants.push(w.slice(0,-3)+'e',w.slice(0,-3)+'d')} // creative→create
+  if(w.endsWith('able')){variants.push(w.slice(0,-4),w.slice(0,-4)+'e')} // manageable→manage
+  if(w.endsWith('ible')){variants.push(w.slice(0,-4))} // accessible→access
+  // Deduplicate
+  return[...new Set(variants)].filter(v=>v.length>=2);
+}
+
+async function lookupDict(word){
+  const variants=getWordVariants(word);
+  // Source 1: dictionaryapi.dev
+  for(const v of variants){
+    try{
+      const resp=await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/'+encodeURIComponent(v));
+      if(resp.ok){const data=await resp.json();if(data&&Array.isArray(data)&&data.length)return{src:'dict',data:data[0]}}
+    }catch(e){}
+  }
+  // Source 2: Wiktionary REST API (much better GRE coverage)
+  for(const v of variants){
+    try{
+      const resp=await fetch('https://en.wiktionary.org/api/rest_v1/page/definition/'+encodeURIComponent(v));
+      if(!resp.ok)continue;
+      const data=await resp.json();
+      if(!data||!data.en||!data.en.length)continue;
+      const defs=[],exs=[];
+      let pos='';
+      for(const section of data.en){
+        if(section.partOfSpeech&&!pos)pos=section.partOfSpeech;
+        for(const d of section.definitions||[]){
+          if(d.definition){
+            // Strip HTML tags
+            const clean=d.definition.replace(/<[^>]+>/g,'').trim();
+            if(clean)defs.push(clean);
+          }
+          if(d.examples){
+            for(const ex of d.examples){
+              const clean=ex.replace(/<[^>]+>/g,'').trim();
+              if(clean)exs.push(clean);
+            }
+          }
+        }
+      }
+      if(defs.length)return{src:'wiktionary',data:{phonetic:'',pos,definitions:defs.slice(0,5),examples:exs.slice(0,4),synonyms:[],antonyms:[]}}
+    }catch(e){}
+  }
+  // Source 3: Datamuse API (word relationships — synonyms/related)
+  for(const v of variants){
+    try{
+      const[defsResp,synResp]=await Promise.all([
+        fetch('https://api.datamuse.com/words?sp='+encodeURIComponent(v)+'&md=d&max=1'),
+        fetch('https://api.datamuse.com/words?rel_syn='+encodeURIComponent(v)+'&max=8')
+      ]);
+      const defsData=await defsResp.json();
+      const synData=await synResp.json();
+      if(defsData&&defsData.length&&defsData[0].defs&&defsData[0].defs.length){
+        const defs=defsData[0].defs.map(d=>{const parts=d.split('\t');return(parts[1]||d).trim()});
+        const syns=synData.map(s=>s.word);
+        return{src:'datamuse',data:{phonetic:'',pos:defsData[0].tags?defsData[0].tags.find(t=>['n','v','adj','adv'].includes(t))||'':'',definitions:defs.slice(0,5),examples:[],synonyms:syns,antonyms:[]}}
+      }
+    }catch(e){}
+  }
+  return null;
 }
 
 async function enrichCards(list){
@@ -540,72 +670,102 @@ async function enrichCards(list){
   prog.style.display='block';stopBtn.style.display='inline-flex';
   let done=0,aborted=false;
   stopBtn.onclick=()=>aborted=true;
-
-  for(let i=0;i<list.length;i++){
+  const BATCH=8;
+  const notFoundWords=[];
+  for(let i=0;i<list.length;i+=BATCH){
     if(aborted)break;
-    const card=list[i];
-    status.textContent=`${card.word} (${i+1}/${list.length})`;
+    const batch=list.slice(i,i+BATCH);
+    status.textContent=`${i+1}-${Math.min(i+BATCH,list.length)} از ${list.length} (${done} یافت شد)`;
     fill.style.width=((i/list.length)*100)+'%';
-    try{
-      const url=`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(card.word)}`;
-      const resp=await fetch(url);
-      if(resp.ok){
-        const data=await resp.json();
-        if(data&&Array.isArray(data)&&data.length){
-          const entry=data[0];
-          // Phonetic
+    await Promise.allSettled(batch.map(async card=>{
+      try{
+        const result=await lookupDict(card.word);
+        if(!result){notFoundWords.push(card.word);return}
+        const entry=result.data;
+        let D=[],E=[],S=[],A=[];
+        if(result.src==='dict'){
           for(const p of entry.phonetics||[]){if(p.text){card.ipa=p.text;break}}
-          // Meanings
-          let allDefs=[],allExs=[],allSyns=[],allAnts=[];
           for(const m of entry.meanings||[]){
             card.partOfSpeech=card.partOfSpeech||m.partOfSpeech||'';
-            for(const d of m.definitions||[]){
-              if(d.definition)allDefs.push(d.definition);
-              if(d.example)allExs.push(d.example);
-            }
-            allSyns.push(...(m.synonyms||[]));
-            allAnts.push(...(m.antonyms||[]));
+            for(const d of m.definitions||[]){if(d.definition)D.push(d.definition);if(d.example)E.push(d.example)}
+            S.push(...(m.synonyms||[]));A.push(...(m.antonyms||[]));
           }
-          if(!card.definitions.length)card.definitions=allDefs.slice(0,5);
-          if(!card.examples.length)card.examples=allExs.slice(0,4);
-          if(!card.synonyms.length)card.synonyms=[...new Set(allSyns)].slice(0,8);
-          if(!card.antonyms.length)card.antonyms=[...new Set(allAnts)].slice(0,6);
-          if(!card.coreMeaning&&allDefs[0])card.coreMeaning=allDefs[0].slice(0,200);
+        }else{
+          if(entry.pos)card.partOfSpeech=card.partOfSpeech||entry.pos;
+          D.push(...(entry.definitions||[]));
+          E.push(...(entry.examples||[]));
+          S.push(...(entry.synonyms||[]));
+          A.push(...(entry.antonyms||[]));
         }
-      }
-    }catch(e){}
-    done++;
-    if(i%5===0)await new Promise(r=>setTimeout(r,200)); // rate limit
+        if(!card.definitions.length)card.definitions=D.slice(0,5);
+        if(!card.examples.length)card.examples=E.slice(0,4);
+        if(!card.synonyms.length)card.synonyms=[...new Set(S)].slice(0,8);
+        if(!card.antonyms.length)card.antonyms=[...new Set(A)].slice(0,6);
+        if(!card.coreMeaning&&D[0])card.coreMeaning=D[0].slice(0,200);
+        done++;
+      }catch(e){}
+    }));
+    if(i+BATCH<list.length)await new Promise(r=>setTimeout(r,120));
   }
+  saveCards();
   fill.style.width='100%';
-  status.textContent=aborted?'متوقف شد':`${done} کلمه غنی‌سازی شد`;
+  const nfHtml=notFoundWords.length?`<div style="margin-top:8px;padding:10px;background:var(--bg);border-radius:10px;font-size:.78rem"><strong style="color:var(--danger)">یافت نشد (${notFoundWords.length}):</strong><div style="margin-top:4px;color:var(--text2)">${notFoundWords.map(w=>'<span style="margin-left:6px">'+esc(w)+'</span>').join('')}</div></div>`:'';
+  status.innerHTML=aborted?'متوقف شد':`✅ ${done} یافت شد — ❌ ${notFoundWords.length} یافت نشد`+nfHtml;
   stopBtn.style.display='none';
-  toast(done+' کلمه غنی‌سازی شد','success');
+  toast(done+' یافت شد، '+notFound+' یافت نشد','success');
 }
 
 // Translation cache
 const transCache={};
+const transFailed=new Set();
+let _transApiStatus={mymemory:'unknown',lastError:''};
+
 async function translateWord(word){
   if(transCache[word])return transCache[word];
-  // Try translating with context if we have definition
-  const card=cards.find(c=>c.word===word);
-  let query=word;
-  if(card&&card.definitions&&card.definitions[0]){
-    // Use first definition for better translation context
-    query=word+' ('+card.definitions[0].slice(0,80)+')';
+  if(transFailed.has(word))return'';
+
+  // Try MyMemory first
+  if(_transApiStatus.mymemory!=='dead'){
+    try{
+      const url='https://api.mymemory.translated.net/get?q='+encodeURIComponent(word)+'&langpair=en|fa';
+      const resp=await fetch(url);
+      if(!resp.ok){
+        _transApiStatus.mymemory='dead';
+        _transApiStatus.lastError='HTTP '+resp.status;
+      }else{
+        const data=await resp.json();
+        let result=data?.responseData?.translatedText||'';
+        if(data.responseStatus===429||data.responseStatus===403){
+          _transApiStatus.mymemory='dead';
+          _transApiStatus.lastError='Rate limited';
+        }else if(result&&!result.includes('MYMEMORY')&&result.toUpperCase()!==word.toUpperCase()&&result.length<200&&result.length>=2){
+          result=result.replace(/\s*\([^)]*[a-zA-Z]{3,}[^)]*\)\s*$/,'').trim();
+          if(result.length>=2){transCache[word]=result;return result}
+        }
+      }
+    }catch(e){
+      _transApiStatus.mymemory='dead';
+      _transApiStatus.lastError=e.message;
+    }
   }
+
+  // Fallback: Google Translate (unofficial)
   try{
-    const url=`https://api.mymemory.translated.net/get?q=${encodeURIComponent(query)}&langpair=en|fa`;
+    const url='https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=fa&dt=t&q='+encodeURIComponent(word);
     const resp=await fetch(url);
-    const data=await resp.json();
-    let result=data?.responseData?.translatedText||'';
-    if(result&&result.toUpperCase()!==word.toUpperCase()&&!result.includes('MYMEMORY')){
-      // Clean up: remove the English part if translator included it
-      result=result.replace(/\s*\(.*\)\s*$/,'').trim();
-      transCache[word]=result;
-      return result;
+    if(resp.ok){
+      const data=await resp.json();
+      if(data&&data[0]){
+        let result=data[0].map(s=>s[0]).join('');
+        if(result&&result.toUpperCase()!==word.toUpperCase()&&result.length>=2){
+          transCache[word]=result;
+          return result;
+        }
+      }
     }
   }catch(e){}
+
+  transFailed.add(word);
   return'';
 }
 
@@ -618,20 +778,29 @@ async function translateCards(list){
   prog.style.display='block';stopBtn.style.display='inline-flex';
   let done=0,aborted=false;
   stopBtn.onclick=()=>aborted=true;
-
-  for(let i=0;i<list.length;i++){
+  const BATCH=8;
+  const notFoundWords=[];
+  for(let i=0;i<list.length;i+=BATCH){
     if(aborted)break;
-    const card=list[i];
-    status.textContent=`${card.word} (${i+1}/${list.length})`;
+    const batch=list.slice(i,i+BATCH);
+    status.textContent=`${i+1}-${Math.min(i+BATCH,list.length)} از ${list.length} — ${done} ترجمه شد`;
     fill.style.width=((i/list.length)*100)+'%';
-    const t=await translateWord(card.word);
-    if(t){card.translation=t;done++}
-    if(i%3===0)await new Promise(r=>setTimeout(r,300));
+    await Promise.allSettled(batch.map(async card=>{
+      try{
+        const t=await translateWord(card.word);
+        if(t){card.translation=t;done++}
+        else notFoundWords.push(card.word);
+      }catch(e){notFoundWords.push(card.word)}
+    }));
+    if(i+BATCH<list.length)await new Promise(r=>setTimeout(r,150));
   }
+  saveCards();
   fill.style.width='100%';
-  status.textContent=aborted?'متوقف شد':`${done} کلمه ترجمه شد`;
+  const apiWarn=_transApiStatus.mymemory==='dead'?`<div style="margin-top:6px;color:var(--warning);font-size:.78rem">⚠️ MyMemory غیرفعال: ${esc(_transApiStatus.lastError)} — از Google Translate استفاده شد</div>`:'';
+  const nfHtml=notFoundWords.length?`<div style="margin-top:8px;padding:10px;background:var(--bg);border-radius:10px;font-size:.78rem;max-height:200px;overflow-y:auto"><strong style="color:var(--danger)">ترجمه نشد (${notFoundWords.length}):</strong><div style="margin-top:4px;color:var(--text2)">${notFoundWords.slice(0,50).map(w=>'<span style="margin-left:6px">'+esc(w)+'</span>').join('')}${notFoundWords.length>50?'...':''}</div></div>`:'';
+  status.innerHTML=aborted?'متوقف شد':`✅ ${done} ترجمه شد — ❌ ${notFoundWords.length} نشد`+apiWarn+nfHtml;
   stopBtn.style.display='none';
-  toast(done+' کلمه ترجمه شد','success');
+  toast(done+' ترجمه شد، '+notFoundWords.length+' نشد','success');
 }
 
 // ═══════════════════════════════════════════
