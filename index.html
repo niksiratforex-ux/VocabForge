@@ -64,6 +64,34 @@ select.input{cursor:pointer}
 .theme-toggle{background:none;border:1px solid var(--border);color:var(--text);width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:1rem;display:flex;align-items:center;justify-content:center}
 .theme-toggle:hover{background:var(--accent-glow);border-color:var(--accent)}
 .sidebar:not(.open){transform:translateX(100%)}.main.sidebar-open{margin-right:240px}.main.sidebar-closed{margin-right:0}
+/* ═══ ANIMATIONS ═══ */
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+@keyframes shimmer{0%{background-position:-200px 0}100%{background-position:200px 0}}
+.card{animation:fadeIn .3s ease-out}
+.card-item{animation:fadeIn .25s ease-out}
+.stat-card{transition:transform .2s,box-shadow .2s}
+.stat-card:hover{transform:translateY(-3px);box-shadow:0 6px 20px rgba(0,0,0,.2)}
+.drop-zone{transition:all .3s ease}
+.drop-zone:hover{transform:scale(1.01)}
+.btn{transition:all .2s ease}
+.btn:hover{transform:translateY(-1px);filter:brightness(1.1)}
+.btn:active{transform:scale(.97) translateY(0)}
+/* ═══ LOADING SKELETON ═══ */
+.skeleton{background:linear-gradient(90deg,var(--card) 25%,var(--card-hover) 50%,var(--card) 75%);background-size:400px 100%;animation:shimmer 1.5s infinite;border-radius:8px}
+/* ═══ BETTER PROGRESS ═══ */
+.progress-bar{position:relative;overflow:hidden}
+.progress-fill{position:relative}
+.progress-fill::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.15),transparent);animation:shimmer 1.5s infinite}
+/* ═══ CARD ITEM ENHANCED ═══ */
+.card-item{position:relative;overflow:hidden}
+.card-item::before{content:'';position:absolute;top:0;right:0;width:3px;height:0;background:var(--accent);transition:height .3s;border-radius:0 0 0 3px}
+.card-item:hover::before{height:100%}
+/* ═══ ENRICH STATUS ═══ */
+.enrich-done{color:var(--success);font-weight:600}
+.enrich-fail{color:var(--danger)}
+/* ═══ TOAST ENHANCED ═══ */
+.toast{backdrop-filter:blur(8px)}
 @media(max-width:768px){.sidebar{transform:translateX(100%)}.sidebar.open{transform:translateX(0)}.main{margin-right:0;padding:12px}.stat-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
@@ -100,12 +128,81 @@ let cards=[]; // full Leitner-format cards
 let sourceName='';
 
 // ═══════════════════════════════════════════
-// PERSISTENCE
+// PERSISTENCE — IndexedDB (unlimited) + cache
 // ═══════════════════════════════════════════
-const VF_KEY='vocabforge_cards';
-function saveCards(){try{localStorage.setItem(VF_KEY,JSON.stringify(cards))}catch(e){}}
-function loadCards(){try{const d=localStorage.getItem(VF_KEY);if(d){cards=JSON.parse(d);if(!Array.isArray(cards))cards=[]}}catch(e){cards=[]}}
-loadCards();
+const IDB_NAME='vocabforgeDB';
+const IDB_CARDS='cards';
+const IDB_CACHE='cache';
+let _db=null;
+
+function openDB(){
+  return new Promise(function(resolve,reject){
+    if(_db){resolve(_db);return}
+    const req=indexedDB.open(IDB_NAME,2);
+    req.onupgradeneeded=function(e){
+      const db=e.target.result;
+      if(!db.objectStoreNames.contains(IDB_CARDS))db.createObjectStore(IDB_CARDS);
+      if(!db.objectStoreNames.contains(IDB_CACHE))db.createObjectStore(IDB_CACHE);
+    };
+    req.onsuccess=function(e){_db=e.target.result;resolve(_db)};
+    req.onerror=function(e){reject(e.target.error)};
+  });
+}
+
+function idbPut(store,key,value){
+  return openDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      const tx=db.transaction(store,'readwrite');
+      tx.objectStore(store).put(value,key);
+      tx.oncomplete=function(){resolve()};
+      tx.onerror=function(e){reject(e.target.error)};
+    });
+  });
+}
+
+function idbGet(store,key){
+  return openDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      const tx=db.transaction(store,'readonly');
+      const req=tx.objectStore(store).get(key);
+      req.onsuccess=function(){resolve(req.result)};
+      req.onerror=function(e){reject(e.target.error)};
+    });
+  });
+}
+
+function idbGetAll(store){
+  return openDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      const tx=db.transaction(store,'readonly');
+      const req=tx.objectStore(store).getAll();
+      req.onsuccess=function(){resolve(req.result||[])};
+      req.onerror=function(e){reject(e.target.error)};
+    });
+  });
+}
+
+function saveCards(){
+  idbPut(IDB_CARDS,'all',cards).catch(function(){
+    try{localStorage.setItem('vf_cards_fallback',JSON.stringify(cards))}catch(e){}
+  });
+}
+
+function loadCards(){
+  return idbGet(IDB_CARDS,'all').then(function(data){
+    if(data&&Array.isArray(data)){cards=data;return}
+    // Fallback: try localStorage
+    try{const d=localStorage.getItem('vf_cards_fallback');if(d){cards=JSON.parse(d);if(!Array.isArray(cards))cards=[]}}catch(e){cards=[]}
+  }).catch(function(){
+    try{const d=localStorage.getItem('vf_cards_fallback');if(d){cards=JSON.parse(d);if(!Array.isArray(cards))cards=[]}}catch(e){cards=[]}
+  });
+}
+
+// ═══ CACHE — dictionary & translation results ═══
+function getCachedDict(word){return idbGet(IDB_CACHE,'dict_'+word.toLowerCase())}
+function setCachedDict(word,data){return idbPut(IDB_CACHE,'dict_'+word.toLowerCase(),{data:data,ts:Date.now()})}
+function getCachedTrans(word){return idbGet(IDB_CACHE,'trans_'+word.toLowerCase())}
+function setCachedTrans(word,data){return idbPut(IDB_CACHE,'trans_'+word.toLowerCase(),{data:data,ts:Date.now()})}
 
 // ═══════════════════════════════════════════
 // HELPERS
@@ -430,7 +527,9 @@ function addWordsFromText(text,source,minLen,maxWords){
 // ═══════════════════════════════════════════
 // CARDS TAB
 // ═══════════════════════════════════════════
+let cardPage=0,cardPageSize=30;
 function renderCards(c){
+  cardPage=0;
   c.innerHTML=`
   <div class="stat-grid">
     <div class="stat-card"><div class="val">${cards.length}</div><div class="lbl">کل کارت‌ها</div></div>
@@ -441,22 +540,62 @@ function renderCards(c){
   <div class="filter-bar">
     <input class="input" placeholder="🔍 جستجو..." id="cardFilter" style="max-width:200px">
     <select class="input" id="cardStatus" style="max-width:150px"><option value="">همه</option><option value="complete">کامل</option><option value="incomplete">ناقص</option></select>
+    <select class="input" id="cardPageSize" style="max-width:100px"><option value="20">20</option><option value="30" selected>30</option><option value="50">50</option><option value="100">100</option><option value="9999">همه</option></select>
     <button class="btn btn-sm btn-danger" id="clearAllBtn">🗑 حذف همه</button>
     <span style="color:var(--text2);font-size:.78rem" id="cardCount"></span>
   </div>
-  <div id="cardsList" style="max-height:55vh;overflow-y:auto"></div>`;
+  <div id="cardPager"></div>
+  <div id="cardsList"></div>`;
 
-  function refresh(){
+  function getFilteredList(){
     const filter=(document.getElementById('cardFilter').value||'').toLowerCase();
     const status=document.getElementById('cardStatus').value;
     let list=cards;
     if(filter)list=list.filter(c=>c.word.includes(filter)||(c.translation||'').toLowerCase().includes(filter));
     if(status==='complete')list=list.filter(c=>c.definitions.length&&c.translation);
     else if(status==='incomplete')list=list.filter(c=>!c.definitions.length||!c.translation);
-    document.getElementById('cardCount').textContent=list.length+' کارت';
+    return list;
+  }
+
+  function renderPager(total){
+    const totalPages=Math.ceil(total/cardPageSize);
+    const el=document.getElementById('cardPager');
+    if(totalPages<=1){el.innerHTML='';return}
+    let h='<div style="display:flex;gap:4px;align-items:center;justify-content:center;margin-bottom:12px;flex-wrap:wrap">';
+    h+='<button class="btn btn-sm btn-ghost" data-pg="prev" '+(cardPage===0?'disabled':'')+'>◀</button>';
+    const start=Math.max(0,cardPage-2);
+    const end=Math.min(totalPages,start+5);
+    for(let i=start;i<end;i++){
+      h+='<button class="btn btn-sm '+(i===cardPage?'btn-primary':'btn-ghost')+'" data-pg="'+i+'">'+(i+1)+'</button>';
+    }
+    if(end<totalPages)h+='<span style="color:var(--text2);font-size:.78rem">...</span>';
+    h+='<button class="btn btn-sm btn-ghost" data-pg="next" '+(cardPage>=totalPages-1?'disabled':'')+'>▶</button>';
+    h+='<span style="color:var(--text2);font-size:.78rem;margin-right:8px">صفحه '+(cardPage+1)+' از '+totalPages+'</span>';
+    h+='</div>';
+    el.innerHTML=h;
+    el.querySelectorAll('[data-pg]').forEach(btn=>{
+      btn.onclick=()=>{
+        const pg=btn.dataset.pg;
+        if(pg==='prev')cardPage=Math.max(0,cardPage-1);
+        else if(pg==='next')cardPage=Math.min(totalPages-1,cardPage+1);
+        else cardPage=parseInt(pg);
+        refresh();
+      };
+    });
+  }
+
+  function refresh(){
+    const list=getFilteredList();
+    const total=list.length;
+    document.getElementById('cardCount').textContent=total+' کارت';
+    const totalPages=Math.ceil(total/cardPageSize);
+    if(cardPage>=totalPages)cardPage=Math.max(0,totalPages-1);
+    const start=cardPage*cardPageSize;
+    const pageItems=list.slice(start,start+cardPageSize);
+    renderPager(total);
     const el=document.getElementById('cardsList');
-    if(!list.length){el.innerHTML='<div style="text-align:center;padding:30px;color:var(--text2)">کارتی یافت نشد</div>';return}
-    el.innerHTML=list.map((w,i)=>{
+    if(!pageItems.length){el.innerHTML='<div style="text-align:center;padding:30px;color:var(--text2)">کارتی یافت نشد</div>';return}
+    el.innerHTML=pageItems.map((w)=>{
       const idx=cards.indexOf(w);
       return`<div class="card-item" data-idx="${idx}">
         <div style="display:flex;justify-content:space-between;align-items:start">
@@ -477,8 +616,9 @@ function renderCards(c){
     el.querySelectorAll('[data-act="edit"]').forEach(btn=>{btn.onclick=e=>{e.stopPropagation();openEditModal(parseInt(btn.closest('.card-item').dataset.idx),refresh)}});
   }
   refresh();
-  document.getElementById('cardFilter').oninput=refresh;
-  document.getElementById('cardStatus').onchange=refresh;
+  document.getElementById('cardFilter').oninput=()=>{cardPage=0;refresh()};
+  document.getElementById('cardStatus').onchange=()=>{cardPage=0;refresh()};
+  document.getElementById('cardPageSize').onchange=function(){cardPageSize=parseInt(this.value);cardPage=0;refresh()};
   document.getElementById('clearAllBtn').onclick=()=>{if(confirm('حذف همه؟')){cards=[];refresh();toast('حذف شد','success')}};
 }
 
@@ -518,26 +658,36 @@ function openEditModal(idx,refresh){
 // ═══════════════════════════════════════════
 // ENRICH TAB — Dictionary + Translation
 // ═══════════════════════════════════════════
-function renderEnrich(c){
+async function renderEnrich(c){
   const needDict=cards.filter(c=>!c.definitions.length);
   const needTrans=cards.filter(c=>!c.translation);
+  const enriched=cards.length-needDict.length;
+  const translated=cards.length-needTrans.length;
   c.innerHTML=`
+  <div class="stat-grid">
+    <div class="stat-card"><div class="val" style="color:var(--success)">${enriched}</div><div class="lbl">غنی‌شده</div></div>
+    <div class="stat-card"><div class="val" style="color:var(--accent)">${needDict.length}</div><div class="lbl">نیاز به غنی‌سازی</div></div>
+    <div class="stat-card"><div class="val" style="color:var(--success)">${translated}</div><div class="lbl">ترجمه‌شده</div></div>
+    <div class="stat-card"><div class="val" style="color:var(--warning)">${needTrans.length}</div><div class="lbl">نیاز به ترجمه</div></div>
+  </div>
   <div class="card">
     <h3 style="margin-bottom:10px">🔍 جستجوی تعریف از DictionaryAPI</h3>
-    <p style="font-size:.82rem;color:var(--text2);margin-bottom:10px">تعریف، تلفظ، POS، مترادف و متضاد دریافت می‌کند.</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" id="enrichAllBtn">🔍 همه (${needDict.length} بدون تعریف)</button>
+    <p style="font-size:.82rem;color:var(--text2);margin-bottom:10px">تعریف، تلفظ، POS، مترادف و متضاد دریافت می‌کند. نتایج کش می‌شوند — دوباره‌پردازی نمی‌شوند.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" id="enrichAllBtn">🔍 غنی‌سازی ${needDict.length} کلمه</button>
       <button class="btn btn-danger btn-sm" id="enrichStopBtn" style="display:none">⏹ توقف</button>
+      <span style="font-size:.78rem;color:var(--text2);margin-right:auto">${enriched} از ${cards.length} کامل</span>
     </div>
     <div class="progress-bar" id="enrichProg" style="display:none"><div class="progress-fill" id="enrichFill" style="width:0"></div></div>
     <div id="enrichStatus" style="font-size:.8rem;color:var(--text2);margin-top:6px"></div>
   </div>
   <div class="card">
     <h3 style="margin-bottom:10px">🌐 ترجمه فارسی</h3>
-    <p style="font-size:.82rem;color:var(--text2);margin-bottom:10px">ترجمه بر اساس معنی انگلیسی کلمه (نه فقط کلمه به کلمه)</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" id="transAllBtn">🌐 همه (${needTrans.length} بدون ترجمه)</button>
+    <p style="font-size:.82rem;color:var(--text2);margin-bottom:10px">ترجمه بر اساس معنی انگلیسی کلمه (نه فقط کلمه به کلمه). نتایج کش می‌شوند.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" id="transAllBtn">🌐 ترجمه ${needTrans.length} کلمه</button>
       <button class="btn btn-danger btn-sm" id="transStopBtn" style="display:none">⏹ توقف</button>
+      <span style="font-size:.78rem;color:var(--text2);margin-right:auto">${translated} از ${cards.length} کامل</span>
     </div>
     <div class="progress-bar" id="transProg" style="display:none"><div class="progress-fill" id="transFill" style="width:0"></div></div>
     <div id="transStatus" style="font-size:.8rem;color:var(--text2);margin-top:6px"></div>
@@ -546,10 +696,24 @@ function renderEnrich(c){
     <h3 style="margin-bottom:10px">✏️ ترجمه دستی</h3>
     <p style="font-size:.82rem;color:var(--text2);margin-bottom:10px">ترجمه بر اساس معنی انگلیسی — اگر کلمه چند معنی دارد، معنی مناسب GRE را وارد کنید</p>
     <div id="manualTransList" style="max-height:300px;overflow-y:auto"></div>
+  </div>
+  <div class="card" style="border-color:var(--border)">
+    <h3 style="margin-bottom:8px;font-size:.9rem">🗑 مدیریت کش</h3>
+    <p style="font-size:.78rem;color:var(--text2);margin-bottom:8px">کش ذخیره‌سازی: نتایج غنی‌سازی و ترجمه ذخیره می‌شوند تا دوباره پردازش نشوند.</p>
+    <button class="btn btn-ghost btn-sm" id="clearCacheBtn">🗑 پاک کردن کش</button>
   </div>`;
 
   document.getElementById('enrichAllBtn').onclick=()=>enrichCards(needDict);
   document.getElementById('transAllBtn').onclick=()=>translateCards(needTrans);
+  document.getElementById('clearCacheBtn').onclick=async function(){
+    if(!confirm('پاک کردن کش؟ دفعه بعد غنی‌سازی و ترجمه دوباره انجام می‌شود.'))return;
+    try{
+      const db=await openDB();
+      const tx=db.transaction(IDB_CACHE,'readwrite');
+      tx.objectStore(IDB_CACHE).clear();
+      tx.oncomplete=function(){toast('کش پاک شد','success');render()};
+    }catch(e){toast('خطا','error')}
+  };
   renderManualTransList();
 }
 
@@ -606,59 +770,69 @@ function getWordVariants(word){
 }
 
 async function lookupDict(word){
+  // Check cache first
+  const cached=await getCachedDict(word);
+  if(cached&&cached.data)return cached.data;
   const variants=getWordVariants(word);
+  let result=null;
   // Source 1: dictionaryapi.dev
   for(const v of variants){
     try{
       const resp=await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/'+encodeURIComponent(v));
-      if(resp.ok){const data=await resp.json();if(data&&Array.isArray(data)&&data.length)return{src:'dict',data:data[0]}}
+      if(resp.ok){const data=await resp.json();if(data&&Array.isArray(data)&&data.length){result={src:'dict',data:data[0]};break}}
     }catch(e){}
   }
   // Source 2: Wiktionary REST API (much better GRE coverage)
-  for(const v of variants){
-    try{
-      const resp=await fetch('https://en.wiktionary.org/api/rest_v1/page/definition/'+encodeURIComponent(v));
-      if(!resp.ok)continue;
-      const data=await resp.json();
-      if(!data||!data.en||!data.en.length)continue;
-      const defs=[],exs=[];
-      let pos='';
-      for(const section of data.en){
-        if(section.partOfSpeech&&!pos)pos=section.partOfSpeech;
-        for(const d of section.definitions||[]){
-          if(d.definition){
-            // Strip HTML tags
-            const clean=d.definition.replace(/<[^>]+>/g,'').trim();
-            if(clean)defs.push(clean);
-          }
-          if(d.examples){
-            for(const ex of d.examples){
-              const clean=ex.replace(/<[^>]+>/g,'').trim();
-              if(clean)exs.push(clean);
+  if(!result){
+    for(const v of variants){
+      try{
+        const resp=await fetch('https://en.wiktionary.org/api/rest_v1/page/definition/'+encodeURIComponent(v));
+        if(!resp.ok)continue;
+        const data=await resp.json();
+        if(!data||!data.en||!data.en.length)continue;
+        const defs=[],exs=[];
+        let pos='';
+        for(const section of data.en){
+          if(section.partOfSpeech&&!pos)pos=section.partOfSpeech;
+          for(const d of section.definitions||[]){
+            if(d.definition){
+              const clean=d.definition.replace(/<[^>]+>/g,'').trim();
+              if(clean)defs.push(clean);
+            }
+            if(d.examples){
+              for(const ex of d.examples){
+                const clean=ex.replace(/<[^>]+>/g,'').trim();
+                if(clean)exs.push(clean);
+              }
             }
           }
         }
-      }
-      if(defs.length)return{src:'wiktionary',data:{phonetic:'',pos,definitions:defs.slice(0,5),examples:exs.slice(0,4),synonyms:[],antonyms:[]}}
-    }catch(e){}
+        if(defs.length){result={src:'wiktionary',data:{phonetic:'',pos,definitions:defs.slice(0,5),examples:exs.slice(0,4),synonyms:[],antonyms:[]}};break}
+      }catch(e){}
+    }
   }
   // Source 3: Datamuse API (word relationships — synonyms/related)
-  for(const v of variants){
-    try{
-      const[defsResp,synResp]=await Promise.all([
-        fetch('https://api.datamuse.com/words?sp='+encodeURIComponent(v)+'&md=d&max=1'),
-        fetch('https://api.datamuse.com/words?rel_syn='+encodeURIComponent(v)+'&max=8')
-      ]);
-      const defsData=await defsResp.json();
-      const synData=await synResp.json();
-      if(defsData&&defsData.length&&defsData[0].defs&&defsData[0].defs.length){
-        const defs=defsData[0].defs.map(d=>{const parts=d.split('\t');return(parts[1]||d).trim()});
-        const syns=synData.map(s=>s.word);
-        return{src:'datamuse',data:{phonetic:'',pos:defsData[0].tags?defsData[0].tags.find(t=>['n','v','adj','adv'].includes(t))||'':'',definitions:defs.slice(0,5),examples:[],synonyms:syns,antonyms:[]}}
-      }
-    }catch(e){}
+  if(!result){
+    for(const v of variants){
+      try{
+        const[defsResp,synResp]=await Promise.all([
+          fetch('https://api.datamuse.com/words?sp='+encodeURIComponent(v)+'&md=d&max=1'),
+          fetch('https://api.datamuse.com/words?rel_syn='+encodeURIComponent(v)+'&max=8')
+        ]);
+        const defsData=await defsResp.json();
+        const synData=await synResp.json();
+        if(defsData&&defsData.length&&defsData[0].defs&&defsData[0].defs.length){
+          const defs=defsData[0].defs.map(d=>{const parts=d.split('\t');return(parts[1]||d).trim()});
+          const syns=synData.map(s=>s.word);
+          result={src:'datamuse',data:{phonetic:'',pos:defsData[0].tags?defsData[0].tags.find(t=>['n','v','adj','adv'].includes(t))||'':'',definitions:defs.slice(0,5),examples:[],synonyms:syns,antonyms:[]}};
+          break;
+        }
+      }catch(e){}
+    }
   }
-  return null;
+  // Cache the result
+  if(result)await setCachedDict(word,result);
+  return result;
 }
 
 async function enrichCards(list){
@@ -670,7 +844,7 @@ async function enrichCards(list){
   prog.style.display='block';stopBtn.style.display='inline-flex';
   let done=0,aborted=false;
   stopBtn.onclick=()=>aborted=true;
-  const BATCH=8;
+  const BATCH=20;
   const notFoundWords=[];
   for(let i=0;i<list.length;i+=BATCH){
     if(aborted)break;
@@ -705,7 +879,9 @@ async function enrichCards(list){
         done++;
       }catch(e){}
     }));
-    if(i+BATCH<list.length)await new Promise(r=>setTimeout(r,120));
+    // Save progress every 5 batches
+    if((i/BATCH)%5===4)saveCards();
+    if(i+BATCH<list.length)await new Promise(r=>setTimeout(r,50));
   }
   saveCards();
   fill.style.width='100%';
@@ -723,6 +899,9 @@ let _transApiStatus={mymemory:'unknown',lastError:''};
 async function translateWord(word){
   if(transCache[word])return transCache[word];
   if(transFailed.has(word))return'';
+  // Check IDB cache
+  const cached=await getCachedTrans(word);
+  if(cached&&cached.data){transCache[word]=cached.data;return cached.data}
 
   // Try MyMemory first
   if(_transApiStatus.mymemory!=='dead'){
@@ -740,7 +919,7 @@ async function translateWord(word){
           _transApiStatus.lastError='Rate limited';
         }else if(result&&!result.includes('MYMEMORY')&&result.toUpperCase()!==word.toUpperCase()&&result.length<200&&result.length>=2){
           result=result.replace(/\s*\([^)]*[a-zA-Z]{3,}[^)]*\)\s*$/,'').trim();
-          if(result.length>=2){transCache[word]=result;return result}
+          if(result.length>=2){transCache[word]=result;setCachedTrans(word,result);return result}
         }
       }
     }catch(e){
@@ -759,6 +938,7 @@ async function translateWord(word){
         let result=data[0].map(s=>s[0]).join('');
         if(result&&result.toUpperCase()!==word.toUpperCase()&&result.length>=2){
           transCache[word]=result;
+          setCachedTrans(word,result);
           return result;
         }
       }
@@ -778,7 +958,7 @@ async function translateCards(list){
   prog.style.display='block';stopBtn.style.display='inline-flex';
   let done=0,aborted=false;
   stopBtn.onclick=()=>aborted=true;
-  const BATCH=8;
+  const BATCH=20;
   const notFoundWords=[];
   for(let i=0;i<list.length;i+=BATCH){
     if(aborted)break;
@@ -792,7 +972,9 @@ async function translateCards(list){
         else notFoundWords.push(card.word);
       }catch(e){notFoundWords.push(card.word)}
     }));
-    if(i+BATCH<list.length)await new Promise(r=>setTimeout(r,150));
+    // Save progress every 5 batches
+    if((i/BATCH)%5===4)saveCards();
+    if(i+BATCH<list.length)await new Promise(r=>setTimeout(r,50));
   }
   saveCards();
   fill.style.width='100%';
@@ -890,7 +1072,7 @@ function renderAbout(c){
 // INIT
 // ═══════════════════════════════════════════
 applyTheme();
-render();
+loadCards().then(function(){render()});
 </script>
 </body>
 </html>
