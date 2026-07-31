@@ -894,7 +894,7 @@ async function enrichCards(list){
 // Translation cache
 const transCache={};
 const transFailed=new Set();
-let _transApiStatus={mymemory:'unknown',lastError:''};
+let _transApiStatus={mymemory:'unknown',lastError:'',cooldownUntil:0};
 
 async function translateWord(word){
   if(transCache[word])return transCache[word];
@@ -903,7 +903,10 @@ async function translateWord(word){
   const cached=await getCachedTrans(word);
   if(cached&&cached.data){transCache[word]=cached.data;return cached.data}
 
-  // Try MyMemory first
+  // Try MyMemory first (recover from cooldown after 60s)
+  if(_transApiStatus.mymemory==='dead'&&Date.now()>_transApiStatus.cooldownUntil){
+    _transApiStatus.mymemory='unknown'; // retry
+  }
   if(_transApiStatus.mymemory!=='dead'){
     try{
       const url='https://api.mymemory.translated.net/get?q='+encodeURIComponent(word)+'&langpair=en|fa';
@@ -911,12 +914,14 @@ async function translateWord(word){
       if(!resp.ok){
         _transApiStatus.mymemory='dead';
         _transApiStatus.lastError='HTTP '+resp.status;
+        _transApiStatus.cooldownUntil=Date.now()+60000;
       }else{
         const data=await resp.json();
         let result=data?.responseData?.translatedText||'';
         if(data.responseStatus===429||data.responseStatus===403){
           _transApiStatus.mymemory='dead';
           _transApiStatus.lastError='Rate limited';
+          _transApiStatus.cooldownUntil=Date.now()+60000;
         }else if(result&&!result.includes('MYMEMORY')&&result.toUpperCase()!==word.toUpperCase()&&result.length<200&&result.length>=2){
           result=result.replace(/\s*\([^)]*[a-zA-Z]{3,}[^)]*\)\s*$/,'').trim();
           if(result.length>=2){transCache[word]=result;setCachedTrans(word,result);return result}
@@ -925,6 +930,7 @@ async function translateWord(word){
     }catch(e){
       _transApiStatus.mymemory='dead';
       _transApiStatus.lastError=e.message;
+      _transApiStatus.cooldownUntil=Date.now()+60000;
     }
   }
 
@@ -958,7 +964,7 @@ async function translateCards(list){
   prog.style.display='block';stopBtn.style.display='inline-flex';
   let done=0,aborted=false;
   stopBtn.onclick=()=>aborted=true;
-  const BATCH=20;
+  const BATCH=10;
   const notFoundWords=[];
   for(let i=0;i<list.length;i+=BATCH){
     if(aborted)break;
@@ -974,7 +980,7 @@ async function translateCards(list){
     }));
     // Save progress every 5 batches
     if((i/BATCH)%5===4)saveCards();
-    if(i+BATCH<list.length)await new Promise(r=>setTimeout(r,50));
+    if(i+BATCH<list.length)await new Promise(r=>setTimeout(r,150));
   }
   saveCards();
   fill.style.width='100%';
