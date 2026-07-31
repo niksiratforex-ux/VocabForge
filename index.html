@@ -619,7 +619,7 @@ function renderCards(c){
   document.getElementById('cardFilter').oninput=()=>{cardPage=0;refresh()};
   document.getElementById('cardStatus').onchange=()=>{cardPage=0;refresh()};
   document.getElementById('cardPageSize').onchange=function(){cardPageSize=parseInt(this.value);cardPage=0;refresh()};
-  document.getElementById('clearAllBtn').onclick=()=>{if(confirm('حذف همه؟')){cards=[];refresh();toast('حذف شد','success')}};
+  document.getElementById('clearAllBtn').onclick=()=>{if(confirm('حذف همه؟')){cards=[];saveCards();refresh();toast('حذف شد','success')}};
 }
 
 function openEditModal(idx,refresh){
